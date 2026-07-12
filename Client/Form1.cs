@@ -17,6 +17,17 @@ public class PlayerInfo
     public string Shape { get; set; } = "";
     public float X { get; set; }
     public float Y { get; set; }
+    public int Health { get; set; }
+}
+
+public class BulletInfo
+{
+    public int Id { get; set; }
+    public int OwnerId { get; set; }
+    public float X { get; set; }
+    public float Y { get; set; }
+    public float Dx { get; set; }
+    public float Dy { get; set; }
 }
 
 public class Form1 : Form
@@ -29,8 +40,16 @@ public class Form1 : Form
     private int fieldWidth = 800, fieldHeight = 600;
 
     private readonly Dictionary<int, PlayerInfo> players = new();
+    private readonly Dictionary<int, BulletInfo> bullets = new();
+    private readonly Dictionary<int, BulletInfo> localBullets = new();
     private readonly object lockObj = new();
     private readonly System.Windows.Forms.Timer redrawTimer;
+    private DateTime lastShootTime = DateTime.MinValue;
+    private readonly TimeSpan shootCooldown = TimeSpan.FromMilliseconds(200);
+    private PointF lastMousePosition = new();
+    private string statusText = "Connecting...";
+    private bool socketConnected = false;
+    private int nextLocalBulletId = -1;
 
     public Form1()
     {
@@ -41,10 +60,12 @@ public class Form1 : Form
         BackColor = Color.White;
 
         redrawTimer = new System.Windows.Forms.Timer { Interval = 33 }; // ~30 fps
-        redrawTimer.Tick += (s, e) => Invalidate();
+        redrawTimer.Tick += (s, e) => { UpdateLocalBullets(); Invalidate(); };
         redrawTimer.Start();
 
         KeyDown += Form1_KeyDown;
+        MouseDown += Form1_MouseDown;
+        MouseMove += Form1_MouseMove;
         Paint += Form1_Paint;
         Load += Form1_Load;
         FormClosing += (s, e) => { try { client?.Close(); } catch { } };
@@ -60,12 +81,14 @@ public class Form1 : Form
             await client.ConnectAsync(serverIp, 5000);
             stream = client.GetStream();
             writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
+            socketConnected = true;
             _ = Task.Run(ReceiveLoop);
+            statusText = "Connected to server, waiting for init...";
         }
         catch (Exception ex)
         {
-            MessageBox.Show("Could not connect to server: " + ex.Message);
-            Close();
+            socketConnected = false;
+            statusText = "Connection failed: " + ex.Message;
         }
     }
 
@@ -124,23 +147,34 @@ public class Form1 : Form
             fieldWidth = root.GetProperty("FieldWidth").GetInt32();
             fieldHeight = root.GetProperty("FieldHeight").GetInt32();
             lock (lockObj) { players[myId] = info; }
-
+            socketConnected = true;
+            statusText = $"Connected as P{myId} ({info.Color} {info.Shape})";
             if (IsHandleCreated)
                 Invoke(() => Text = $"Multiplayer Shapes - You are Player {myId} ({info.Color} {info.Shape})");
         }
         else if (type == "state")
         {
             var list = JsonSerializer.Deserialize<List<PlayerInfo>>(root.GetProperty("Players").GetRawText())!;
+            var bulletsList = JsonSerializer.Deserialize<List<BulletInfo>>(root.GetProperty("Bullets").GetRawText())!;
             lock (lockObj)
             {
                 players.Clear();
+                bullets.Clear();
                 foreach (var p in list) players[p.Id] = p;
+                foreach (var b in bulletsList) bullets[b.Id] = b;
             }
         }
     }
 
     private void Form1_KeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.KeyCode == Keys.Space)
+        {
+            if (myId >= 0)
+                SendShoot(lastMousePosition.X, lastMousePosition.Y);
+            return;
+        }
+
         float dx = 0, dy = 0;
         const float step = 8f;
         switch (e.KeyCode)
@@ -152,6 +186,19 @@ public class Form1 : Form
             default: return;
         }
         SendMove(dx, dy);
+    }
+
+    private void Form1_MouseDown(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left) return;
+        if (myId < 0) return;
+        if (e.X < 0 || e.X > fieldWidth || e.Y < 0 || e.Y > fieldHeight) return;
+        SendShoot(e.X, e.Y);
+    }
+
+    private void Form1_MouseMove(object? sender, MouseEventArgs e)
+    {
+        lastMousePosition = new PointF(e.X, e.Y);
     }
 
     private void SendMove(float dx, float dy)
@@ -168,11 +215,64 @@ public class Form1 : Form
         }
     }
 
+    private void SendShoot(float targetX, float targetY)
+    {
+        if (writer == null)
+        {
+            statusText = "Not connected to server";
+            return;
+        }
+        if (DateTime.UtcNow - lastShootTime < shootCooldown)
+        {
+            statusText = "Shooting too fast";
+            return;
+        }
+        lastShootTime = DateTime.UtcNow;
+
+        float startX = lastMousePosition.X;
+        float startY = lastMousePosition.Y;
+        if (players.TryGetValue(myId, out var myPlayer))
+        {
+            startX = myPlayer.X;
+            startY = myPlayer.Y;
+        }
+        float dx = targetX - startX;
+        float dy = targetY - startY;
+        float length = MathF.Max(1f, MathF.Sqrt(dx * dx + dy * dy));
+        float normX = dx / length;
+        float normY = dy / length;
+
+        localBullets[nextLocalBulletId] = new BulletInfo
+        {
+            Id = nextLocalBulletId,
+            OwnerId = myId,
+            X = startX,
+            Y = startY,
+            Dx = normX * 15f,
+            Dy = normY * 15f
+        };
+        nextLocalBulletId--;
+
+        try
+        {
+            string msg = JsonSerializer.Serialize(new { Type = "shoot", TargetX = targetX, TargetY = targetY });
+            writer.WriteLine(msg);
+            statusText = $"Shot fired at {targetX:F0}, {targetY:F0}";
+            Console.WriteLine(statusText);
+        }
+        catch
+        {
+            statusText = "Could not send shot";
+        }
+    }
+
     private void Form1_Paint(object? sender, PaintEventArgs e)
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.DrawRectangle(Pens.Black, 0, 0, fieldWidth, fieldHeight);
+        g.DrawString("Left-click or press Space to shoot", Font, Brushes.DarkBlue, 10, fieldHeight + 10);
+        g.DrawString(statusText, Font, Brushes.DarkRed, 10, fieldHeight + 30);
 
         List<PlayerInfo> snapshot;
         lock (lockObj) { snapshot = players.Values.ToList(); }
@@ -224,6 +324,46 @@ public class Form1 : Form
                 g.DrawRectangle(Pens.Black, rect.Left - 2, rect.Top - 2, rect.Width + 4, rect.Height + 4);
 
             g.DrawString($"P{p.Id}", Font, Brushes.Black, rect.Left, rect.Bottom + 2);
+
+            int barWidth = 40;
+            int barHeight = 6;
+            float healthPercent = Math.Clamp(p.Health / 100f, 0f, 1f);
+            var barRect = new RectangleF(rect.Left + (rect.Width - barWidth) / 2f, rect.Top - 14, barWidth, barHeight);
+            g.FillRectangle(Brushes.DarkGray, barRect);
+            g.FillRectangle(Brushes.LimeGreen, new RectangleF(barRect.Left, barRect.Top, barWidth * healthPercent, barHeight));
+            g.DrawRectangle(Pens.Black, barRect.Left, barRect.Top, barRect.Width, barRect.Height);
+        }
+
+        var bulletSnapshot = bullets.Values.ToList();
+        foreach (var bullet in bulletSnapshot)
+        {
+            const int bulletSize = 10;
+            var bulletRect = new RectangleF(bullet.X - bulletSize / 2f, bullet.Y - bulletSize / 2f, bulletSize, bulletSize);
+            using var bulletBrush = new SolidBrush(Color.Black);
+            g.FillEllipse(bulletBrush, bulletRect);
+            g.DrawEllipse(Pens.DarkGray, bulletRect);
+        }
+
+        var localBulletSnapshot = localBullets.Values.ToList();
+        foreach (var bullet in localBulletSnapshot)
+        {
+            const int bulletSize = 10;
+            var bulletRect = new RectangleF(bullet.X - bulletSize / 2f, bullet.Y - bulletSize / 2f, bulletSize, bulletSize);
+            using var bulletBrush = new SolidBrush(Color.Red);
+            g.FillEllipse(bulletBrush, bulletRect);
+            g.DrawEllipse(Pens.DarkRed, bulletRect);
+        }
+    }
+
+    private void UpdateLocalBullets()
+    {
+        var localSnapshot = localBullets.Values.ToList();
+        foreach (var bullet in localSnapshot)
+        {
+            bullet.X += bullet.Dx;
+            bullet.Y += bullet.Dy;
+            if (bullet.X < 0 || bullet.X > fieldWidth || bullet.Y < 0 || bullet.Y > fieldHeight)
+                localBullets.Remove(bullet.Id);
         }
     }
 
