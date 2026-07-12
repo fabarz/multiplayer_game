@@ -80,7 +80,7 @@ class Program
             {
                 string? line = await reader.ReadLineAsync();
                 if (line == null) break;
-                HandleMessage(id, line);
+                await HandleMessageAsync(id, line);
             }
         }
         catch
@@ -95,7 +95,7 @@ class Program
         }
     }
 
-    static void HandleMessage(int id, string line)
+    static async Task HandleMessageAsync(int id, string line)
     {
         try
         {
@@ -114,6 +114,30 @@ class Program
                         cc.Info.X = Math.Clamp(cc.Info.X + dx, 0, FieldWidth);
                         cc.Info.Y = Math.Clamp(cc.Info.Y + dy, 0, FieldHeight);
                     }
+                }
+            }
+            else if (type == "chat")
+            {
+                string chatContent = root.GetProperty("Message").GetString() ?? "";
+                
+                // Format the text prefix with the player's ID
+                string formattedMessage = $"[Player {id}]: {chatContent}";
+                Console.WriteLine($"Chat broadcast: {formattedMessage}");
+
+                // Prepare the JSON broadcast packet
+                string outgoingJson = JsonSerializer.Serialize(new { Type = "chat", Message = formattedMessage });
+
+                List<ConnectedClient> targets;
+                lock (Lock)
+                {
+                    targets = Clients.Values.ToList();
+                }
+
+                // Broadcast chat line to all clients simultaneously
+                foreach (var cc in targets)
+                {
+                    try { await SendLine(cc.Stream, outgoingJson); }
+                    catch { /* Handle connection exceptions or let cleanup loop drop client */ }
                 }
             }
         }

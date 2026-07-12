@@ -32,6 +32,11 @@ public class Form1 : Form
     private readonly object lockObj = new();
     private readonly System.Windows.Forms.Timer redrawTimer;
 
+    // Chat UI Elements
+    private TextBox? txtChatHistory;
+    private TextBox? txtChatInput;
+    private Button? btnSendChat;
+
     public Form1()
     {
         Text = "Multiplayer Shapes";
@@ -40,6 +45,8 @@ public class Form1 : Form
         KeyPreview = true;
         BackColor = Color.White;
 
+        InitializeChatUI();
+
         redrawTimer = new System.Windows.Forms.Timer { Interval = 33 }; // ~30 fps
         redrawTimer.Tick += (s, e) => Invalidate();
         redrawTimer.Start();
@@ -47,7 +54,62 @@ public class Form1 : Form
         KeyDown += Form1_KeyDown;
         Paint += Form1_Paint;
         Load += Form1_Load;
+        
+        // Fix: Clicking anywhere outside the textboxes shifts focus back to the form so you can play
+        MouseDown += Form1_MouseDown;
+
         FormClosing += (s, e) => { try { client?.Close(); } catch { } };
+    }
+
+    private void InitializeChatUI()
+    {
+        // Chat History Box
+        txtChatHistory = new TextBox
+        {
+            Location = new Point(10, 10),
+            Size = new Size(220, 100),
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Vertical,
+            BackColor = Color.FromArgb(240, 240, 240),
+            TabStop = false
+        };
+
+        // Chat Input Box
+        txtChatInput = new TextBox
+        {
+            Location = new Point(10, 115),
+            Size = new Size(155, 23),
+            TabStop = true
+        };
+        txtChatInput.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true; // Prevent beep sound
+                SendChatMessage();
+            }
+        };
+
+        // Send Button
+        btnSendChat = new Button
+        {
+            Text = "Send",
+            Location = new Point(170, 114),
+            Size = new Size(60, 25),
+            TabStop = false
+        };
+        btnSendChat.Click += (s, e) => SendChatMessage();
+
+        Controls.Add(txtChatHistory);
+        Controls.Add(txtChatInput);
+        Controls.Add(btnSendChat);
+    }
+
+    private void Form1_MouseDown(object? sender, MouseEventArgs e)
+    {
+        // If you click on the game screen, clear active control focus from textboxes
+        this.ActiveControl = null;
     }
 
     private async void Form1_Load(object? sender, EventArgs e)
@@ -137,18 +199,42 @@ public class Form1 : Form
                 foreach (var p in list) players[p.Id] = p;
             }
         }
+        else if (type == "chat")
+        {
+            string senderMsg = root.GetProperty("Message").GetString() ?? "";
+            Invoke(() =>
+            {
+                txtChatHistory?.AppendText(senderMsg + Environment.NewLine);
+            });
+        }
     }
 
     private void Form1_KeyDown(object? sender, KeyEventArgs e)
     {
+        // If the user is intentionally typing into the chat box, don't execute movement controls
+        if (txtChatInput != null && txtChatInput.Focused) return;
+
         float dx = 0, dy = 0;
         const float step = 8f;
         switch (e.KeyCode)
         {
-            case Keys.Left: dx = -step; break;
-            case Keys.Right: dx = step; break;
-            case Keys.Up: dy = -step; break;
-            case Keys.Down: dy = step; break;
+            // Arrow Keys
+            case Keys.Left: 
+            case Keys.A: 
+                dx = -step; break;
+                
+            case Keys.Right: 
+            case Keys.D: 
+                dx = step; break;
+                
+            case Keys.Up: 
+            case Keys.W: 
+                dy = -step; break;
+                
+            case Keys.Down: 
+            case Keys.S: 
+                dy = step; break;
+                
             default: return;
         }
         SendMove(dx, dy);
@@ -165,6 +251,26 @@ public class Form1 : Form
         catch
         {
             // ignore send failures, server may have gone away
+        }
+    }
+
+    private void SendChatMessage()
+    {
+        if (writer == null || txtChatInput == null || string.IsNullOrWhiteSpace(txtChatInput.Text)) return;
+
+        try
+        {
+            string cleanText = txtChatInput.Text.Trim();
+            string msg = JsonSerializer.Serialize(new { Type = "chat", Message = cleanText });
+            writer.WriteLine(msg);
+            txtChatInput.Clear();
+            
+            // Shift focus back to the form so player controls instantly work again after hitting Enter
+            this.ActiveControl = null;
+        }
+        catch
+        {
+            // ignore send failures
         }
     }
 
