@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<body>
+<h3>calculator</h3>
+<input id="i" type="number" step="1" oninput="f()"><br>
+<p>answer:</p>
+<input id="t" readonly><br><br>
+<button onclick="i.value=t.value=''">clear</button>
+<script>
+function f() {
+    let n = Number(i.value), a = 1;
+    if (n < 0 || !Number.isInteger(n)) { t.value = "Error"; return; }
+    for (let x = 1; x <= n; x++) a *= x;
+    t.value = n === 0 ? 1 : a;
+}
+</script>
+</body>
+</html>
