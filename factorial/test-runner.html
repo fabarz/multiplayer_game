@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Factorial Test Runner</title>
+  <style>
+    body { font-family: system-ui, Arial; padding: 20px; }
+    button { padding: 8px 12px; font-size: 16px }
+    .ok { color: green }
+    .fail { color: red }
+    table { border-collapse: collapse; margin-top: 12px }
+    td, th { border: 1px solid #ccc; padding: 6px 10px }
+  </style>
+</head>
+<body>
+  <h2>Factorial Test Runner</h2>
+  <p>This page runs a small set of checks against the factorial implementation when you click <strong>Run Tests</strong>.</p>
+
+  <p>
+    <button id="run">Run Tests</button>
+    <a href="factorial.html" target="_blank" style="margin-left:12px">Open UI (factorial.html)</a>
+  </p>
+
+  <div id="summary"></div>
+  <table id="results" aria-live="polite"></table>
+
+  <script>
+    // Browser-friendly factorial implementation (same logic as project)
+    function factorial(n) {
+      if (n < 0 || !Number.isInteger(n)) return "Error";
+      let a = 1;
+      for (let x = 1; x <= n; x++) a *= x;
+      return n === 0 ? 1 : a;
+    }
+
+    const tests = [
+      { name: 'zero returns 1', input: 0, expected: '1' },
+      { name: 'five returns 120', input: 5, expected: '120' },
+      { name: 'negative returns Error', input: -1, expected: 'Error' },
+      { name: 'non-integer returns Error', input: 4.5, expected: 'Error' }
+    ];
+
+    function runTests() {
+      const results = document.getElementById('results');
+      results.innerHTML = '<tr><th>Test</th><th>Input</th><th>Expected</th><th>Actual</th><th>Status</th></tr>';
+      let passed = 0;
+
+      for (const t of tests) {
+        const actual = factorial(t.input);
+        const actualStr = String(actual);
+        const ok = actualStr === t.expected;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${t.name}</td>
+          <td>${t.input}</td>
+          <td>${t.expected}</td>
+          <td>${actualStr}</td>
+          <td class="${ok ? 'ok' : 'fail'}">${ok ? 'PASS' : 'FAIL'}</td>
+        `;
+        results.appendChild(tr);
+        if (ok) passed++;
+      }
+
+      const summary = document.getElementById('summary');
+      summary.innerHTML = `<p><strong>Results:</strong> ${passed} / ${tests.length} passed.</p>`;
+      if (passed === tests.length) summary.querySelector('p').className = 'ok';
+      else summary.querySelector('p').className = 'fail';
+    }
+
+    document.getElementById('run').addEventListener('click', runTests);
+  </script>
+</body>
+</html>
